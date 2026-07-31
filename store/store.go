@@ -6,17 +6,16 @@ import (
 	"iterpugov/go-payment-ledger/ledger"
 )
 
-// Repository — слой хранения за интерфейсом.
-// Транзакции (проводки + outbox) должны коммититься атомарно.
+// Repository — слой хранения за интерфейсом. Не-транзакционные операции +
+// граница транзакции (WithinTx). Проводки + outbox коммитятся атомарно внутри
+// одной WithinTx, которой оркестрирует домен.
 type Repository interface {
 	CreateAccount(ctx context.Context, currency string) (ledger.Account, error)
 	GetAccount(ctx context.Context, id string) (ledger.Account, error)
 	Balance(ctx context.Context, accountID string) (ledger.Money, error)
-
-	// Transfer атомарно: идемпотентность, 2 проводки, outbox-событие, статус.
-	Transfer(ctx context.Context, req ledger.TransferRequest) (ledger.Transfer, error)
 	GetTransfer(ctx context.Context, id string) (ledger.Transfer, error)
-	GetTransferByIdempotencyKey(ctx context.Context, key string) (ledger.Transfer, error)
-
 	Ping(ctx context.Context) error
+
+	// WithinTx запускает fn в одной транзакции (см. ledger.TxRunner).
+	ledger.TxRunner
 }

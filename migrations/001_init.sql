@@ -16,8 +16,7 @@ CREATE TABLE transfers (
   to_account      UUID NOT NULL REFERENCES accounts(id),
   amount          BIGINT NOT NULL,            -- входная сумма > 0, минорные единицы
   currency        CHAR(3) NOT NULL,
-  status          TEXT NOT NULL,              -- PENDING | POSTED | FAILED
-  request_hash    TEXT NOT NULL,              -- для 409 при повторе ключа с др. параметрами
+  status          TEXT NOT NULL,              -- всегда POSTED (одна tx: либо коммит, либо строки нет)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- повтор с тем же ключом → та же операция, а не вторая

@@ -4,11 +4,11 @@
     "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
     "tasks.max": "1",
 
-    "database.hostname": "orchestrator",
+    "database.hostname": "ledger",
     "database.port": "5432",
     "database.user": "ledger",
     "database.password": "ledger",
-    "database.dbname": "orchestrator",
+    "database.dbname": "ledger",
     "topic.prefix": "pl",
 
     "plugin.name": "pgoutput",

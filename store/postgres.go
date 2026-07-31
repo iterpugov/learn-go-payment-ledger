@@ -61,7 +61,7 @@ func (p *Postgres) GetAccount(ctx context.Context, id string) (ledger.Account, e
 }
 
 func (p *Postgres) Balance(ctx context.Context, accountID string) (ledger.Money, error) {
-	row, err := p.db.QueryContext(ctx, "SELECT SUM(amount) FROM postings WHERE account_id = $1", accountID)
+	row, err := p.db.QueryContext(ctx, "SELECT COALESCE(SUM(amount), 0) FROM postings WHERE account_id = $1", accountID)
 	if err != nil {
 		return 0, err
 	}

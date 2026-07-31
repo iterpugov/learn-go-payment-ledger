@@ -6,7 +6,8 @@ import "errors"
 // Не использовать float для денег.
 type Money int64
 
-func NewMoney(minorUnits int64) (Money, error) {
+// строго положительное значение
+func NewAmount(minorUnits int64) (Money, error) {
 	if minorUnits <= 0 {
 		return 0, errors.New("minor units must be positive")
 	}

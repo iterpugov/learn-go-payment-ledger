@@ -1,16 +1,11 @@
-# Стенд для боевого сценария payment-ledger (оркестрированная сага).
+# Стенд для payment-ledger (одна БД, одна транзакция).
 #
-#   docker compose up -d                 -> shard-a, shard-b, orchestrator (Postgres)
+#   docker compose up -d                 -> ledger (Postgres)
 #   docker compose --profile cdc up -d   -> + Redpanda + Debezium + Console
 #
-# Три независимых Postgres:
-#   shard-a       — счета/проводки отправителя (money)
-#   shard-b       — счета/проводки получателя (money)
-#   orchestrator  — durable-состояние саги + outbox лайфсайкл-событий перевода
-#
-# Смысл разнесения: между шардами нет общего COMMIT — атомарность теряется по
-# построению, и её приходится восстанавливать сагой, а не 2PC. orchestrator
-# поднят с wal_level=logical, потому что именно его outbox читает Debezium.
+# Одна БД `ledger`: счета, переводы, проводки и outbox лайфсайкл-событий.
+# Перевод — один локальный COMMIT (двойная запись + outbox атомарно). БД поднята
+# с wal_level=logical, потому что её outbox читает Debezium.
 
 x-pg-logical: &pg-logical
   image: postgres:16
@@ -27,53 +22,19 @@ x-pg-logical: &pg-logical
     POSTGRES_PASSWORD: ledger
 
 services:
-  shard-a:
+  ledger:
     <<: *pg-logical
-    container_name: pl-shard-a
+    container_name: pl-ledger
     environment:
       POSTGRES_USER: ledger
       POSTGRES_PASSWORD: ledger
-      POSTGRES_DB: shard_a
+      POSTGRES_DB: ledger
     ports:
-      - "5438:5432"
+      - "5432:5432"
     volumes:
-      - shard-a-data:/var/lib/postgresql/data
+      - ledger-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ledger -d shard_a"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  shard-b:
-    <<: *pg-logical
-    container_name: pl-shard-b
-    environment:
-      POSTGRES_USER: ledger
-      POSTGRES_PASSWORD: ledger
-      POSTGRES_DB: shard_b
-    ports:
-      - "5439:5432"
-    volumes:
-      - shard-b-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ledger -d shard_b"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  orchestrator:
-    <<: *pg-logical
-    container_name: pl-orchestrator
-    environment:
-      POSTGRES_USER: ledger
-      POSTGRES_PASSWORD: ledger
-      POSTGRES_DB: orchestrator
-    ports:
-      - "5440:5432"
-    volumes:
-      - orchestrator-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ledger -d orchestrator"]
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -108,7 +69,7 @@ services:
     depends_on:
       redpanda:
         condition: service_healthy
-      orchestrator:
+      ledger:
         condition: service_healthy
     ports:
       - "8083:8083"
@@ -139,6 +100,4 @@ services:
       CONNECT_CLUSTERS_URL: http://connect:8083
 
 volumes:
-  shard-a-data:
-  shard-b-data:
-  orchestrator-data:
+  ledger-data:

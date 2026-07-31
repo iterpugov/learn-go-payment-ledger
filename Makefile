@@ -1,23 +1,21 @@
 # payment-ledger — команды стенда и приложения.
-# Код (миграции, оркестратор, сервер, консьюмер) реализуешь сам; цели — ориентир.
 
 DC        := docker compose -f deploy/docker-compose.yml
 CONNECT   := http://localhost:8083
 
-# DSN по шардам (порты проброшены наружу; внутри сети сервисы ходят по именам).
-DSN_A     ?= postgres://ledger:ledger@localhost:5438/shard_a?sslmode=disable
-DSN_B     ?= postgres://ledger:ledger@localhost:5439/shard_b?sslmode=disable
-DSN_ORCH  ?= postgres://ledger:ledger@localhost:5440/orchestrator?sslmode=disable
+# DSN одной БД (порт проброшен наружу; внутри сети сервисы ходят по имени).
+DSN       ?= postgres://ledger:ledger@localhost:5432/ledger?sslmode=disable
 
-.PHONY: up up-cdc down clean logs \
-        psql-a psql-b psql-orch \
-        migrate run test tidy \
+GOOSE     ?= go run github.com/pressly/goose/v3/cmd/goose@v3.24.1
+
+.PHONY: up up-cdc down clean logs psql \
+        migrate run consumer test tidy \
         connector connector-status consume
 
 ## --- стенд ---
 
-up:            ## три Postgres: shard-a, shard-b, orchestrator
-	$(DC) up -d shard-a shard-b orchestrator
+up:            ## Postgres `ledger`
+	$(DC) up -d ledger
 
 up-cdc:        ## + Redpanda + Debezium + Console
 	$(DC) --profile cdc up -d
@@ -31,25 +29,18 @@ clean:         ## погасить и снести данные
 logs:
 	$(DC) logs -f
 
-psql-a:
-	docker exec -it pl-shard-a psql -U ledger -d shard_a
-psql-b:
-	docker exec -it pl-shard-b psql -U ledger -d shard_b
-psql-orch:
-	docker exec -it pl-orchestrator psql -U ledger -d orchestrator
+psql:
+	docker exec -it pl-ledger psql -U ledger -d ledger
 
 ## --- приложение (реализуешь сам) ---
 
-migrate:       ## накатить миграции на все три БД (goose/migrate — на выбор)
-	@echo "TODO: подключи миграции. Каталоги-ориентир:"
-	@echo "  goose -dir ./migrations/shard        postgres \"$(DSN_A)\"    up"
-	@echo "  goose -dir ./migrations/shard        postgres \"$(DSN_B)\"    up"
-	@echo "  goose -dir ./migrations/orchestrator postgres \"$(DSN_ORCH)\" up"
+migrate:       ## накатить миграции
+	$(GOOSE) -dir ./migrations postgres "$(DSN)" up
 
-run:           ## запустить API + оркестратор (+ воркер саги)
+run:           ## запустить API + ledger
 	go run ./cmd/api
 
-consumer:      ## запустить exactly-once консьюмер outbox-событий
+consumer:      ## запустить exactly-once консьюмер outbox-событий (нотификации)
 	go run ./cmd/consumer
 
 test:
@@ -60,7 +51,7 @@ tidy:
 
 ## --- Debezium (профиль cdc) ---
 
-connector:         ## зарегистрировать outbox-коннектор (читает orchestrator.outbox)
+connector:         ## зарегистрировать outbox-коннектор (читает ledger.outbox)
 	curl -sS -X POST $(CONNECT)/connectors \
 		-H 'Content-Type: application/json' \
 		-d @deploy/debezium-connector.json | jq .

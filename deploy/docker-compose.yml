@@ -1,0 +1,144 @@
+# Стенд для боевого сценария payment-ledger (оркестрированная сага).
+#
+#   docker compose up -d                 -> shard-a, shard-b, orchestrator (Postgres)
+#   docker compose --profile cdc up -d   -> + Redpanda + Debezium + Console
+#
+# Три независимых Postgres:
+#   shard-a       — счета/проводки отправителя (money)
+#   shard-b       — счета/проводки получателя (money)
+#   orchestrator  — durable-состояние саги + outbox лайфсайкл-событий перевода
+#
+# Смысл разнесения: между шардами нет общего COMMIT — атомарность теряется по
+# построению, и её приходится восстанавливать сагой, а не 2PC. orchestrator
+# поднят с wal_level=logical, потому что именно его outbox читает Debezium.
+
+x-pg-logical: &pg-logical
+  image: postgres:16
+  command:
+    - "postgres"
+    - "-c"
+    - "wal_level=logical"
+    - "-c"
+    - "max_wal_senders=10"
+    - "-c"
+    - "max_replication_slots=10"
+  environment:
+    POSTGRES_USER: ledger
+    POSTGRES_PASSWORD: ledger
+
+services:
+  shard-a:
+    <<: *pg-logical
+    container_name: pl-shard-a
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: shard_a
+    ports:
+      - "5438:5432"
+    volumes:
+      - shard-a-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d shard_a"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  shard-b:
+    <<: *pg-logical
+    container_name: pl-shard-b
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: shard_b
+    ports:
+      - "5439:5432"
+    volumes:
+      - shard-b-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d shard_b"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  orchestrator:
+    <<: *pg-logical
+    container_name: pl-orchestrator
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: orchestrator
+    ports:
+      - "5440:5432"
+    volumes:
+      - orchestrator-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d orchestrator"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- ниже только для CDC / exactly-once (профиль cdc) ---
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.4
+    container_name: pl-redpanda
+    profiles: ["cdc"]
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  connect:
+    image: quay.io/debezium/connect:2.7
+    container_name: pl-connect
+    profiles: ["cdc"]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      orchestrator:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:29092
+      GROUP_ID: pl-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+  console:
+    image: redpandadata/console:v2.7.2
+    container_name: pl-console
+    profiles: ["cdc"]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+      CONNECT_ENABLED: "true"
+      CONNECT_CLUSTERS_NAME: debezium
+      CONNECT_CLUSTERS_URL: http://connect:8083
+
+volumes:
+  shard-a-data:
+  shard-b-data:
+  orchestrator-data:

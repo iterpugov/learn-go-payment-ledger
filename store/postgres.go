@@ -173,15 +173,16 @@ func (q *pgQueries) InsertTransfer(ctx context.Context, req ledger.TransferReque
 	}
 	err := q.tx.QueryRowContext(ctx,
 		`INSERT INTO transfers (idempotency_key, from_account, to_account, amount, currency, status)
-		   VALUES ($1,$2,$3,$4,$5,'POSTED') RETURNING id, created_at`,
+		   VALUES ($1,$2,$3,$4,$5,'POSTED')
+		   ON CONFLICT (idempotency_key) DO NOTHING
+		   RETURNING id, created_at`,
 		req.IdempotencyKey, req.FromAccount, req.ToAccount, req.Amount, req.Currency,
 	).Scan(&transfer.ID, &transfer.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		// ключ уже занят другой tx — транзакция жива (в отличие от unique_violation)
+		return ledger.Transfer{}, ledger.ErrDuplicateIdempotencyKey
+	}
 	if err != nil {
-		// SQLState() есть у *pq.Error и *pgconn.PgError — без импорта драйвера.
-		var pgErr interface{ SQLState() string }
-		if errors.As(err, &pgErr) && pgErr.SQLState() == "23505" {
-			return ledger.Transfer{}, ledger.ErrDuplicateIdempotencyKey
-		}
 		return ledger.Transfer{}, err
 	}
 	return transfer, nil
